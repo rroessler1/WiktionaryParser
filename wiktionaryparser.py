@@ -2,8 +2,7 @@ import re, requests
 from utils import WordData, Definition, RelatedWord
 from bs4 import BeautifulSoup
 from itertools import zip_longest
-from copy import copy
-from string import digits, whitespace
+from string import digits
 
 
 LANGUAGES = {
@@ -26,9 +25,10 @@ LANGUAGES = {
 
     'es': {
         'PARTS_OF_SPEECH': [
-            "sustantivo femenino", "sustantivo masculino", "verbo", "verbo transitivo", "verbo intransitivo",
-            "preposición", "pronombre personal", "adverbio", "adjetivo", "adjetivo posesivo", "interjección",
-            "conjunción", "adverbio de modo", "adverbio de tiempo", "adjetivo indefinido", "pronombre interrogativo"
+            "sustantivo", "verbo",
+            "preposición", "pronombre", "adverbio", "adjetivo", "interjección",
+            "conjunción", "onomatopeya",
+            "artículo", "contracción"
         ]
     }
 }
@@ -93,6 +93,13 @@ class WiktionaryParser(object):
     def remove_digits(self, string):
         return string.translate(str.maketrans('', '', digits)).strip()
 
+    def get_first_word(self, string):
+        if ' ' in string:
+            string = string[:string.find(' ')]
+        if '\xa0' in string:
+            string = string[:string.find('\xa0')]
+        return string
+
     def count_digits(self, string):
         return len(list(filter(str.isdigit, string)))
 
@@ -114,11 +121,11 @@ class WiktionaryParser(object):
             return []
         id_list = []
         if len(contents) == 0:
-            return [('1', x.title(), x) for x in checklist if self.soup.find('span', {'id': x.title()})]
+            return []
         for content_tag in contents:
             content_index = content_tag.find_previous().text
             text_to_check = self.remove_digits(content_tag.text).strip().lower()
-            if text_to_check in checklist:
+            if text_to_check in checklist or self.get_first_word(text_to_check) in checklist:
                 content_id = content_tag.parent['href'].replace('#', '')
                 id_list.append((content_index, content_id, text_to_check))
         return id_list
@@ -136,7 +143,8 @@ class WiktionaryParser(object):
             index = content.find_previous().text
             content_text = self.remove_digits(content.text.lower())
             included_items = self.get_included_items()
-            if index.startswith(start_index) and content_text in included_items:
+            if index.startswith(start_index) and \
+                    (content_text in included_items or self.get_first_word(content_text) in included_items):
                 word_contents.append(content)
         word_data = {
             'examples': self.parse_examples(word_contents),
@@ -196,16 +204,24 @@ class WiktionaryParser(object):
                             definition_text.append(element.text.strip())
                 if definition_tag.name == 'dl':
                     for element in definition_tag.find_all('dd', recursive=False):
-                        text = element.text
+                        text = self.get_text_except_elements(element, ['style'])
                         # Sometimes in Spanish, the definitions have examples or synonyms below them.
                         # This gets all the text from the beginning up to the first <ul> element.
                         if text and element.ul and element.ul.text:
-                            text = text.rsplit(element.ul.text, 1)[0]
+                            text = text.split(element.ul.text, 1)[0]
                         definition_text.append(text.strip())
             if def_type == 'definitions':
                 def_type = ''
             definition_list.append((def_index, definition_text, def_type))
         return definition_list
+
+    def get_text_except_elements(self, tag, elements_to_remove):
+        text = tag.text
+        for element in elements_to_remove:
+            for e in tag.find_all(element, recursive=False):
+                if e.text:
+                    text = text.replace(e.text, '')
+        return text
 
     def parse_examples(self, word_contents):
         definition_id_list = self.get_id_list(word_contents, 'definitions')
@@ -290,6 +306,7 @@ class WiktionaryParser(object):
     def fetch(self, word, language=None, old_id=None):
         language = self.language if not language else language
         response = self.session.get(self.url.format(word), params={'oldid': old_id})
+
         self.soup = BeautifulSoup(response.text.replace('>\n<', '><'), 'html.parser')
         self.current_word = word
         self.clean_html()
