@@ -3,21 +3,35 @@ from utils import WordData, Definition, RelatedWord
 from bs4 import BeautifulSoup
 from itertools import zip_longest
 from copy import copy
-from string import digits
+from string import digits, whitespace
 
-PARTS_OF_SPEECH = [
-    "noun", "verb", "adjective", "adverb", "determiner",
-    "article", "preposition", "conjunction", "proper noun",
-    "letter", "character", "phrase", "proverb", "idiom",
-    "symbol", "syllable", "numeral", "initialism", "interjection",
-    "definitions", "pronoun",
-]
 
-RELATIONS = [
-    "synonyms", "antonyms", "hypernyms", "hyponyms",
-    "meronyms", "holonyms", "troponyms", "related terms",
-    "coordinate terms",
-]
+LANGUAGES = {
+    'en': {
+        'ETYMOLOGIES_HEADER': ["etymology"],
+        'PRONUNCIATION_HEADER': ["pronunciation"],
+        'PARTS_OF_SPEECH': [
+            "noun", "verb", "adjective", "adverb", "determiner",
+            "article", "preposition", "conjunction", "proper noun",
+            "letter", "character", "phrase", "proverb", "idiom",
+            "symbol", "syllable", "numeral", "initialism", "interjection",
+            "definitions", "pronoun",
+        ],
+        'RELATIONS': [
+            "synonyms", "antonyms", "hypernyms", "hyponyms",
+            "meronyms", "holonyms", "troponyms", "related terms",
+            "coordinate terms",
+        ]
+    },
+
+    'es': {
+        'PARTS_OF_SPEECH': [
+            "sustantivo femenino", "sustantivo masculino", "verbo", "verbo transitivo", "verbo intransitivo",
+            "preposición", "pronombre personal", "adverbio", "adjetivo", "adjetivo posesivo", "interjección",
+            "conjunción", "adverbio de modo", "adverbio de tiempo", "adjetivo indefinido", "pronombre interrogativo"
+        ]
+    }
+}
 
 class WiktionaryParser(object):
     def __init__(self):
@@ -27,11 +41,11 @@ class WiktionaryParser(object):
         self.session.mount("http://", requests.adapters.HTTPAdapter(max_retries = 2))
         self.session.mount("https://", requests.adapters.HTTPAdapter(max_retries = 2))
         self.language = 'english'
+        self.language_code = 'en'
         self.current_word = None
-        self.PARTS_OF_SPEECH = copy(PARTS_OF_SPEECH)
-        self.RELATIONS = copy(RELATIONS)
-        self.INCLUDED_ITEMS = self.RELATIONS + self.PARTS_OF_SPEECH + ['etymology', 'pronunciation']
 
+    # TODO: the next four methods should be unified into "include_item" and "exclude_item" methods
+    #       Store them in class variables and then use them in the "get_included_items" method
     def include_part_of_speech(self, part_of_speech):
         part_of_speech = part_of_speech.lower()
         if part_of_speech not in self.PARTS_OF_SPEECH:
@@ -54,12 +68,22 @@ class WiktionaryParser(object):
         self.RELATIONS.remove(relation)
         self.INCLUDED_ITEMS.remove(relation)
 
+    def get_included_items(self):
+        return LANGUAGES.get(self.language_code).get('RELATIONS', []) + \
+               LANGUAGES.get(self.language_code).get('PARTS_OF_SPEECH', []) + \
+               LANGUAGES.get(self.language_code).get('ETYMOLOGIES_HEADER', []) + \
+               LANGUAGES.get(self.language_code).get('PRONUNCIATION_HEADER', [])
+
     def set_default_language(self, language=None):
         if language is not None:
             self.language = language.lower()
 
     def get_default_language(self):
         return self.language
+
+    def set_source_language(self, language_code):
+        self.language_code = language_code
+        self.url = "https://{}.wiktionary.org/wiki/{{}}?printable=yes".format(language_code)
 
     def clean_html(self):
         unwanted_classes = ['sister-wikipedia', 'thumb', 'reference', 'cited-source']
@@ -74,17 +98,20 @@ class WiktionaryParser(object):
 
     def get_id_list(self, contents, content_type):
         if content_type == 'etymologies':
-            checklist = ['etymology']
+            checklist = LANGUAGES.get(self.language_code).get('ETYMOLOGIES_HEADER')
         elif content_type == 'pronunciation':
-            checklist = ['pronunciation']
+            checklist = LANGUAGES.get(self.language_code).get('PRONUNCIATION_HEADER')
         elif content_type == 'definitions':
-            checklist = self.PARTS_OF_SPEECH
+            checklist = LANGUAGES.get(self.language_code).get('PARTS_OF_SPEECH')
             if self.language == 'chinese':
                 checklist += self.current_word
         elif content_type == 'related':
-            checklist = self.RELATIONS
+            checklist = LANGUAGES.get(self.language_code).get('RELATIONS')
         else:
             return None
+        # Early exit
+        if not checklist:
+            return []
         id_list = []
         if len(contents) == 0:
             return [('1', x.title(), x) for x in checklist if self.soup.find('span', {'id': x.title()})]
@@ -108,7 +135,8 @@ class WiktionaryParser(object):
         for content in contents:
             index = content.find_previous().text
             content_text = self.remove_digits(content.text.lower())
-            if index.startswith(start_index) and content_text in self.INCLUDED_ITEMS:
+            included_items = self.get_included_items()
+            if index.startswith(start_index) and content_text in included_items:
                 word_contents.append(content)
         word_data = {
             'examples': self.parse_examples(word_contents),
@@ -157,7 +185,7 @@ class WiktionaryParser(object):
             definition_text = []
             span_tag = self.soup.find_all('span', {'id': def_id})[0]
             table = span_tag.parent.find_next_sibling()
-            while table and table.name not in ['h3', 'h4', 'h5']:
+            while table and table.name not in ['h2', 'h3', 'h4', 'h5']:
                 definition_tag = table
                 table = table.find_next_sibling()
                 if definition_tag.name == 'p':
@@ -166,6 +194,14 @@ class WiktionaryParser(object):
                     for element in definition_tag.find_all('li', recursive=False):
                         if element.text:
                             definition_text.append(element.text.strip())
+                if definition_tag.name == 'dl':
+                    for element in definition_tag.find_all('dd', recursive=False):
+                        text = element.text
+                        # Sometimes in Spanish, the definitions have examples or synonyms below them.
+                        # This gets all the text from the beginning up to the first <ul> element.
+                        if text and element.ul and element.ul.text:
+                            text = text.rsplit(element.ul.text, 1)[0]
+                        definition_text.append(text.strip())
             if def_type == 'definitions':
                 def_type = ''
             definition_list.append((def_index, definition_text, def_type))
@@ -177,7 +213,7 @@ class WiktionaryParser(object):
         for def_index, def_id, def_type in definition_id_list:
             span_tag = self.soup.find_all('span', {'id': def_id})[0]
             table = span_tag.parent
-            while table.name != 'ol':
+            while table and table.name != 'ol':
                 table = table.find_next_sibling()
             examples = []
             while table and table.name == 'ol':
@@ -258,3 +294,4 @@ class WiktionaryParser(object):
         self.current_word = word
         self.clean_html()
         return self.get_word_data(language.lower())
+
