@@ -5,7 +5,7 @@ with open('readme.md', 'r') as readme:
 
 setup(
   name = 'wiktionaryparser',
-  version = '0.0.98',
+  version = '0.0.99',
   description = 'A tool to parse word data from wiktionary.com into a JSON object',
   long_description = long_desc,
   long_description_content_type='text/markdown',

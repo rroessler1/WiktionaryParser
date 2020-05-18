@@ -30,6 +30,17 @@ LANGUAGES = {
             "conjunción", "onomatopeya",
             "artículo", "contracción"
         ]
+    },
+
+    'fr': {
+        'PARTS_OF_SPEECH': [
+            "nom commun", "verbe", "adjectif", "adverbe", "déterminant",
+            "article", "preposition", "conjonction", "nom propre",
+            "lettre", "caractère", "expression", "proverbe", "idiome",
+            "symbole", "syllabe", "nombre", "acronyme", "interjection",
+            "définitions", "pronom", "particule", "prédicat", "participe",
+            "suffixe", "locution nominale", "préposition", "forme d’adjectif"
+        ]
     }
 }
 
