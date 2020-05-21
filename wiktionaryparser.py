@@ -41,6 +41,14 @@ LANGUAGES = {
             "définitions", "pronom", "particule", "prédicat", "participe",
             "suffixe", "locution nominale", "préposition", "forme d’adjectif"
         ]
+    },
+
+    'de': {
+        'PARTS_OF_SPEECH': [
+            "verb", "adjektiv", "substantiv", "artikel", "pronomen", "adverb",
+            "interjektion", "konjunktion", "präposition", "kontraktion", "subjunktion",
+            "indefinitpronomen", "temporaladverb", "numerale", "demonstrativpronomen"
+        ]
     }
 }
 
@@ -114,7 +122,7 @@ class WiktionaryParser(object):
     def count_digits(self, string):
         return len(list(filter(str.isdigit, string)))
 
-    def get_id_list(self, contents, content_type):
+    def get_id_list(self, id_list, content_type):
         if content_type == 'etymologies':
             checklist = LANGUAGES.get(self.language_code).get('ETYMOLOGIES_HEADER')
         elif content_type == 'pronunciation':
@@ -130,42 +138,73 @@ class WiktionaryParser(object):
         # Early exit
         if not checklist:
             return []
-        id_list = []
-        if len(contents) == 0:
+        pruned_id_list = []
+        if len(id_list) == 0:
             return []
-        for content_tag in contents:
-            content_index = content_tag.find_previous().text
-            text_to_check = self.remove_digits(content_tag.text).strip().lower()
+        for item in id_list:
+            text_to_check = item[2]
             if text_to_check in checklist or self.get_first_word(text_to_check) in checklist:
-                content_id = content_tag.parent['href'].replace('#', '')
-                id_list.append((content_index, content_id, text_to_check))
-        return id_list
+                pruned_id_list.append(item)
+        return pruned_id_list
 
     def get_word_data(self, language):
         contents = self.soup.find_all('span', {'class': 'toctext'})
-        word_contents = []
         start_index = None
         for content in contents:
             if content.text.lower() == language:
                 start_index = content.find_previous().text + '.'
         if len(contents) != 0 and not start_index:
+            for content in contents:
+                if language in content.text.lower():
+                    start_index = content.find_previous().text + '.'
+        if len(contents) != 0 and not start_index:
             return []
+        id_list = []
+        included_items = self.get_included_items()
         for content in contents:
             index = content.find_previous().text
-            content_text = self.remove_digits(content.text.lower())
-            included_items = self.get_included_items()
+            content_text = self.remove_digits(content.text).strip().lower()
             if index.startswith(start_index) and \
                     (content_text in included_items or self.get_first_word(content_text) in included_items):
-                word_contents.append(content)
+                content_id = content.parent['href'].replace('#', '')
+                id_list.append((index, content_id, content_text))
+        # if there's not a TOC
+        if len(id_list) == 0:
+            id_list = self.get_id_list_without_toc(language)
         word_data = {
-            'examples': self.parse_examples(word_contents),
-            'definitions': self.parse_definitions(word_contents),
-            'etymologies': self.parse_etymologies(word_contents),
-            'related': self.parse_related_words(word_contents),
-            'pronunciations': self.parse_pronunciations(word_contents),
+            'examples': self.parse_examples(id_list),
+            'definitions': self.parse_definitions(id_list),
+            'etymologies': self.parse_etymologies(id_list),
+            'related': self.parse_related_words(id_list),
+            'pronunciations': self.parse_pronunciations(id_list),
         }
         json_obj_list = self.map_to_object(word_data)
         return json_obj_list
+
+    def get_id_list_without_toc(self, language):
+        id_list = []
+        included_items = self.get_included_items()
+        count = 1
+        # Want to check each header that it has a word we're looking for and its parent has the language we're looking for
+        parent_tag = ['h1']
+        for htag in ['h2', 'h3', 'h4', 'h5']:
+            hs = self.soup.find_all(htag)
+            for h in hs:
+                text = get_first_letter_seq(h.text)
+                if text and text.lower() in included_items and prev_sib_contains(h, parent_tag, language):
+                    span_id = self.get_span_id(h)
+                    if span_id:
+                        id_list.append((str(count), span_id, text.lower()))
+                        count += 1
+            if len(id_list) > 0:
+                break
+            parent_tag.append(htag)
+        return id_list
+
+    def get_span_id(self, elem):
+        for span in elem.find_all('span'):
+            if span.text == elem.text:
+                return span['id']
 
     def parse_pronunciations(self, word_contents):
         pronunciation_id_list = self.get_id_list(word_contents, 'pronunciation')
@@ -323,3 +362,22 @@ class WiktionaryParser(object):
         self.clean_html()
         return self.get_word_data(language.lower())
 
+
+def get_first_letter_seq(text):
+    if not text:
+        return None
+    # must use \W so letters with accents are also matched
+    # this splits on any non-letter and any digit, so all that's left is groups of letters
+    tks = re.split("[\W0-9_]", text)
+    for t in tks:
+        if t:
+            return t
+    return None
+
+
+# Checks if there is a text match with the previous sibling's text.
+def prev_sib_contains(elem, tags_to_match, text):
+    sib = elem.find_previous_sibling(tags_to_match)
+    if sib.text and text in sib.text.lower():
+        return True
+    return False
